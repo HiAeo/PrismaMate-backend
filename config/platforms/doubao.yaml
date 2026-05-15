@@ -1,0 +1,33 @@
+platform:
+  name: "Doubao"
+  domain: "www.doubao.com"
+  detection_mode: "browser"  # 豆包暂无官方 API，使用 Browser 模式
+
+# Browser 模式配置
+browser:
+  enabled: true
+  stealth: true
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36..."
+  selectors:
+    # ⚠️ 【重要】执行前必须手动检查豆包实际 DOM 结构并替换以下占位符
+    input: "CHANGE_ME_INPUT_SELECTOR"
+    submit: "CHANGE_ME_SUBMIT_SELECTOR"
+    response: "CHANGE_ME_RESPONSE_SELECTOR"
+    continue_button: "CHANGE_ME_CONTINUE_SELECTOR"
+  wait_times:
+    typing_char_delay: [50, 150]
+    search_interval: [3, 8]
+    response_timeout: 120
+  # 豆包反爬策略：需要更真实的用户行为模拟
+  mouse_movement: true
+  scroll_behavior: true
+
+# 限流配置
+rate_limit:
+  daily_max: 500  # 豆包反爬较强，降低每日上限
+  cooldown_on_failure: 2  # 豆包更容易触发冷却
+  cooldown_duration: 7200
+
+# DOM 选择器版本
+dom_version: "CHANGE_ME_DATE"
+last_change_detected: null

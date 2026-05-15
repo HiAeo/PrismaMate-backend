@@ -1,0 +1,13 @@
+retry:
+  max_attempts: 3
+  backoff_strategy: "exponential"
+  initial_delay: 5  # 秒
+  max_delay: 300  # 秒
+
+task:
+  result_ttl: 86400  # Redis 结果保留 24 小时
+  timeout: 600  # 任务超时 10 分钟
+
+cleanup:
+  raw_response_retention_days: 90  # raw_response 保留 90 天
+  cooldown_events_retention_days: 30  # 冷却事件保留 30 天

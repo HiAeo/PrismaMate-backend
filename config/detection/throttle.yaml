@@ -1,0 +1,18 @@
+# 请求限流配置
+rate_limit:
+  # 冷却期配置
+  cooldown_on_failure: 3  # 连续失败次数触发冷却
+  cooldown_duration: 7200  # 冷却时长（秒），2小时
+  
+  # 请求间隔配置
+  search_interval_min: 3  # 最小请求间隔（秒）
+  search_interval_max: 8  # 最大请求间隔（秒）
+  
+  # 每日上限
+  daily_max_requests: 1000
+
+# 浏览器配置
+browser:
+  memory_limit_mb: 2048  # 单 Worker 内存限制 2GB
+  context_pool_size: 5  # 浏览器上下文池大小
+  platform_tasks_serial: true  # 同一平台任务串行执行

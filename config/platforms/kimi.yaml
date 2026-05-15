@@ -1,0 +1,32 @@
+platform:
+  name: "Kimi"
+  domain: "kimi.moonshot.cn"
+  detection_mode: "browser"
+
+# Browser 模式配置
+browser:
+  enabled: true
+  stealth: true
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36..."
+  selectors:
+    # ⚠️ 【重要】执行前必须手动检查 Kimi 实际 DOM 结构并替换以下占位符
+    input: "CHANGE_ME_INPUT_SELECTOR"
+    submit: "CHANGE_ME_SUBMIT_SELECTOR"
+    response: "CHANGE_ME_RESPONSE_SELECTOR"
+    continue_button: "CHANGE_ME_CONTINUE_SELECTOR"  # Kimi 长文本需要处理"继续生成"按钮
+  wait_times:
+    typing_char_delay: [50, 150]
+    search_interval: [3, 8]
+    response_timeout: 180  # Kimi 长文本回答，超时时间延长
+  # Kimi 特殊处理
+  handle_long_response: true  # 处理长文本回答的"继续生成"
+
+# 限流配置
+rate_limit:
+  daily_max: 800
+  cooldown_on_failure: 3
+  cooldown_duration: 7200
+
+# DOM 选择器版本
+dom_version: "CHANGE_ME_DATE"
+last_change_detected: null
