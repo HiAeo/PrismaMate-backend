@@ -165,12 +165,12 @@ def get_platform_info() -> Dict[str, Dict[str, Any]]:
         "doubao": {
             "name": "doubao",
             "display_name": "豆包",
-            "mode": "browser",
+            "mode": "mock",
             "api_required": False,
-            "env_var": None,
+            "env_var": "DOUBAO_API_KEY",
             "domain": "www.doubao.com",
             "status": "beta",
-            "description": "需要浏览器登录态，MVP 阶段暂不可用"
+            "description": "暂无公开 API，使用模拟响应"
         }
     }
 

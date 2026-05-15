@@ -139,6 +139,45 @@ class DeepSeekAdapter:
             self.cooldown_until = time.time() + 7200  # 2小时
             print(f"[DeepSeek] 进入冷却期，2小时后恢复")
 
+    def _get_friendly_error(self, status_code: int, response_text: str) -> str:
+        """
+        将 HTTP 状态码转换为友好的错误提示
+
+        Args:
+            status_code: HTTP 状态码
+            response_text: 原始响应文本
+
+        Returns:
+            友好的错误提示字符串
+        """
+        error_map = {
+            401: "DeepSeek API Key 无效或已过期，请检查后重新配置",
+            402: "DeepSeek 服务暂时不可用，API 账户可能欠费，请前往 DeepSeek 平台充值",
+            403: "DeepSeek API 访问被拒绝，请检查账户权限或 IP 白名单设置",
+            429: "DeepSeek 服务暂时不可用，请求过于频繁（429），请稍后再试或检查账户额度",
+            500: "DeepSeek 服务器内部错误（500），请稍后再试",
+            502: "DeepSeek 服务网关错误（502），服务端可能暂时不可用，请稍后再试",
+            503: "DeepSeek 服务暂时不可用（503），可能正在维护中，请稍后再试",
+        }
+
+        friendly = error_map.get(status_code)
+        if friendly:
+            return friendly
+
+        # 尝试解析 JSON 错误信息
+        try:
+            import json
+            data = json.loads(response_text)
+            msg = data.get("error", {}).get("message", "")
+            if msg:
+                if "insufficient balance" in msg.lower() or "quota" in msg.lower():
+                    return "DeepSeek 服务暂时不可用，API 账户额度不足或已欠费，请前往 DeepSeek 平台充值"
+                return f"DeepSeek API 错误 ({status_code}): {msg}"
+        except Exception:
+            pass
+
+        return f"DeepSeek API 调用失败，状态码: {status_code}，请检查网络连接或稍后重试"
+
     def login_if_needed(self) -> bool:
         """
         API 模式不需要登录，每次请求自带认证
@@ -222,11 +261,14 @@ class DeepSeekAdapter:
             else:
                 self.consecutive_failures += 1
                 self._check_cooldown()
+                # 友好错误提示
+                friendly_error = self._get_friendly_error(response.status_code, response.text)
                 return {
                     "success": False,
-                    "error": f"API 错误 {response.status_code}: {response.text}",
+                    "error": friendly_error,
                     "content": None,
-                    "elapsed": elapsed
+                    "elapsed": elapsed,
+                    "status_code": response.status_code
                 }
 
         except requests.exceptions.Timeout:

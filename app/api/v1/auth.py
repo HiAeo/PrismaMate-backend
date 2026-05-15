@@ -55,6 +55,12 @@ class UserResponse(BaseModel):
     email: str
     username: str
     created_at: str
+    # Phase 3 新增
+    plan_id: str
+    plan_name: str
+    points_balance: int
+    monthly_usage: int
+    monthly_quota: int
 
 
 # ==================== 依赖项 ====================
@@ -91,21 +97,42 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"}
         )
     
+    # 先尝试查找普通用户
     user = user_store.get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户不存在",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
+    if user:
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="用户已被禁用"
+            )
+        return user
     
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="用户已被禁用"
-        )
+    # 再尝试查找管理员（兼容 admin token）
+    if payload.get("is_admin"):
+        admin = user_store.get_admin_by_id(user_id)
+        if admin:
+            # 返回兼容普通用户的结构，方便前端统一处理
+            return {
+                "user_id": admin.admin_id,
+                "email": admin.username,
+                "username": admin.username,
+                "created_at": admin.created_at.isoformat(),
+                "is_admin": True,
+                "role": admin.role,
+                # 兼容普通用户字段
+                "plan_id": "admin",
+                "plan_name": "管理员",
+                "points_balance": 999999,
+                "monthly_usage": 0,
+                "monthly_quota": 999999,
+                "is_active": True,
+            }
     
-    return user
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="用户不存在",
+        headers={"WWW-Authenticate": "Bearer"}
+    )
 
 
 async def get_optional_user(
@@ -175,11 +202,11 @@ async def login(request: LoginRequest):
     """
     用户登录
     
-    支持邮箱登录或用户名登录
+    支持邮箱登录、用户名登录或管理员账号登录
     
     流程：
     1. 验证必填参数
-    2. 查找用户
+    2. 查找用户（先查普通用户，再查管理员）
     3. 验证密码
     4. 返回 JWT Token
     """
@@ -189,45 +216,77 @@ async def login(request: LoginRequest):
             detail="密码不能为空"
         )
     
-    # 邮箱或用户名登录
-    if request.email:
-        user = user_store.get_user_by_email(request.email)
-    elif request.username:
-        user = user_store.get_user_by_username(request.username)
-    else:
+    # 获取登录标识（邮箱或用户名）
+    login_id = request.email or request.username
+    if not login_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="请提供邮箱或用户名"
         )
     
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户不存在"
+    # 先尝试查找普通用户
+    user = None
+    if request.email:
+        user = user_store.get_user_by_email(request.email)
+    elif request.username:
+        user = user_store.get_user_by_username(request.username)
+    
+    # 普通用户登录
+    if user:
+        if not verify_password(request.password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="密码错误"
+            )
+        
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="用户已被禁用"
+            )
+        
+        # 生成 Token
+        access_token = create_access_token(
+            data={"user_id": user.user_id, "sub": user.email},
+            expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        )
+        
+        return TokenResponse(
+            access_token=access_token,
+            token_type="bearer",
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
         )
     
-    if not verify_password(request.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="密码错误"
+    # 尝试管理员登录（支持用户名 admin 登录）
+    admin = user_store.get_admin_by_username(login_id)
+    if admin:
+        if not verify_password(request.password, admin.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="密码错误"
+            )
+        
+        # 管理员登录成功，生成带 admin 标识的 token
+        access_token = create_access_token(
+            data={
+                "user_id": admin.admin_id,
+                "sub": admin.username,
+                "is_admin": True,
+                "role": admin.role
+            },
+            expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        )
+        
+        return TokenResponse(
+            access_token=access_token,
+            token_type="bearer",
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
         )
     
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="用户已被禁用"
-        )
-    
-    # 生成 Token
-    access_token = create_access_token(
-        data={"user_id": user.user_id, "sub": user.email},
-        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
-    
-    return TokenResponse(
-        access_token=access_token,
-        token_type="bearer",
-        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    # 用户和管理员都不存在
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="用户不存在"
     )
 
 
@@ -237,10 +296,32 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     获取当前登录用户信息
     
     需要认证
+    
+    Phase 3: 返回套餐和积分信息
     """
+    # 兼容管理员账号（get_current_user 返回的是 dict）
+    if isinstance(current_user, dict):
+        return UserResponse(
+            user_id=current_user.get("user_id", ""),
+            email=current_user.get("email", ""),
+            username=current_user.get("username", ""),
+            created_at=current_user.get("created_at", ""),
+            plan_id=current_user.get("plan_id", ""),
+            plan_name=current_user.get("plan_name", ""),
+            points_balance=current_user.get("points_balance", 0),
+            monthly_usage=current_user.get("monthly_usage", 0),
+            monthly_quota=current_user.get("monthly_quota", 0),
+        )
+    
+    plan = current_user.get_plan()
     return UserResponse(
         user_id=current_user.user_id,
         email=current_user.email,
         username=current_user.username,
-        created_at=current_user.created_at.isoformat()
+        created_at=current_user.created_at.isoformat(),
+        plan_id=current_user.plan_id,
+        plan_name=plan["name"],
+        points_balance=current_user.points_balance,
+        monthly_usage=current_user.monthly_usage,
+        monthly_quota=current_user.get_monthly_quota()
     )

@@ -89,6 +89,14 @@ class KimiAdapter:
         Args:
             config: 配置字典
         """
+        # 确保 brands 字段正确初始化（dataclass 与自定义 __init__ 兼容）
+        self.brands = [
+            "华为", "阿里巴巴", "腾讯", "百度", "字节跳动",
+            "小米", "京东", "美团", "滴滴", "拼多多",
+            "OpenAI", "Google", "Microsoft", "Apple", "Meta",
+            "Amazon", "NVIDIA", "Intel", "AMD", "Tesla"
+        ]
+        
         self.config = config or {}
 
         # 从配置中读取设置
@@ -135,6 +143,13 @@ class KimiAdapter:
 
     def _init_api(self):
         """初始化 API 配置"""
+        # 尝试加载 .env 文件（如果尚未加载）
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass
+
         # 从环境变量加载 API Key
         self.api_key = os.environ.get("KIMI_API_KEY") or os.environ.get("MOONSHOT_API_KEY")
 
@@ -216,6 +231,45 @@ class KimiAdapter:
         if self.consecutive_failures >= 3:
             self.cooldown_until = time.time() + 7200
             print(f"[Kimi] 进入冷却期，2小时后恢复")
+
+    def _get_friendly_error(self, status_code: int, response_text: str) -> str:
+        """
+        将 HTTP 状态码转换为友好的错误提示
+
+        Args:
+            status_code: HTTP 状态码
+            response_text: 原始响应文本
+
+        Returns:
+            友好的错误提示字符串
+        """
+        error_map = {
+            401: "Kimi API Key 无效或已过期，请检查后重新配置",
+            402: "Kimi 服务暂时不可用，API 账户可能欠费，请前往 Moonshot 平台充值",
+            403: "Kimi API 访问被拒绝，请检查账户权限或 IP 白名单设置",
+            429: "Kimi 服务暂时不可用，请求过于频繁（429），请稍后再试或检查账户额度",
+            500: "Kimi 服务器内部错误（500），请稍后再试",
+            502: "Kimi 服务网关错误（502），服务端可能暂时不可用，请稍后再试",
+            503: "Kimi 服务暂时不可用（503），可能正在维护中，请稍后再试",
+        }
+
+        friendly = error_map.get(status_code)
+        if friendly:
+            return friendly
+
+        # 尝试解析 JSON 错误信息
+        try:
+            import json
+            data = json.loads(response_text)
+            msg = data.get("error", {}).get("message", "")
+            if msg:
+                if "insufficient balance" in msg.lower() or "quota" in msg.lower():
+                    return "Kimi 服务暂时不可用，API 账户额度不足或已欠费，请前往 Moonshot 平台充值"
+                return f"Kimi API 错误 ({status_code}): {msg}"
+        except Exception:
+            pass
+
+        return f"Kimi API 调用失败，状态码: {status_code}，请检查网络连接或稍后重试"
 
     def login_if_needed(self) -> bool:
         """
@@ -306,7 +360,45 @@ class KimiAdapter:
 
             if response.status_code == 200:
                 result = response.json()
-                content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+                
+                # 防御性检查：确保响应格式正确
+                if not isinstance(result, dict):
+                    return {
+                        "success": False,
+                        "error": f"Kimi API 响应格式错误：期望 dict，实际 {type(result).__name__}",
+                        "content": None,
+                        "elapsed": elapsed
+                    }
+                
+                choices = result.get("choices")
+                if not choices or not isinstance(choices, list) or len(choices) == 0:
+                    return {
+                        "success": False,
+                        "error": "Kimi API 响应中未找到有效的 choices 字段",
+                        "content": None,
+                        "elapsed": elapsed
+                    }
+                
+                first_choice = choices[0]
+                if not isinstance(first_choice, dict):
+                    return {
+                        "success": False,
+                        "error": f"Kimi API choices[0] 类型错误：期望 dict，实际 {type(first_choice).__name__}",
+                        "content": None,
+                        "elapsed": elapsed
+                    }
+                
+                message = first_choice.get("message")
+                if not isinstance(message, dict):
+                    return {
+                        "success": False,
+                        "error": f"Kimi API message 类型错误：期望 dict，实际 {type(message).__name__}",
+                        "content": None,
+                        "elapsed": elapsed
+                    }
+                
+                content = message.get("content", "")
+                
                 self.consecutive_failures = 0
                 return {
                     "success": True,
@@ -319,11 +411,14 @@ class KimiAdapter:
             else:
                 self.consecutive_failures += 1
                 self._check_cooldown()
+                # 友好错误提示
+                friendly_error = self._get_friendly_error(response.status_code, response.text)
                 return {
                     "success": False,
-                    "error": f"API 错误 {response.status_code}: {response.text}",
+                    "error": friendly_error,
                     "content": None,
-                    "elapsed": elapsed
+                    "elapsed": elapsed,
+                    "status_code": response.status_code
                 }
 
         except requests.exceptions.Timeout:
@@ -349,7 +444,8 @@ class KimiAdapter:
         """
         Browser 模式搜索
 
-        使用 Playwright 模拟真实用户访问
+        由于后端运行在 asyncio 环境中，sync_playwright 会冲突，
+        因此 Browser 模式降级为模拟响应。
         """
         start_time = time.time()
 
@@ -362,109 +458,17 @@ class KimiAdapter:
                 "elapsed": 0
             }
 
-        try:
-            from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
-
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                context = browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                )
-                page = context.new_page()
-
-                page.goto(f"https://{self.platform_domain}", timeout=30000)
-                page.wait_for_load_state("networkidle")
-
-                # 检查选择器
-                input_selector = self.browser_selectors.get("input")
-                submit_selector = self.browser_selectors.get("submit")
-                response_selector = self.browser_selectors.get("response")
-
-                if not all([input_selector, submit_selector, response_selector]):
-                    content = self._generate_mock_response(keyword)
-                    elapsed = time.time() - start_time
-                    browser.close()
-                    return {
-                        "success": True,
-                        "content": content,
-                        "elapsed": elapsed,
-                        "mode": "mock",
-                        "error": None,
-                        "warning": "Browser 选择器未配置，使用模拟响应"
-                    }
-
-                # 输入搜索内容
-                page.fill(input_selector, keyword)
-                time.sleep(random.uniform(0.3, 0.8))
-
-                # 点击发送
-                page.click(submit_selector)
-
-                try:
-                    # Kimi 长文本需要更长的等待时间
-                    timeout = self.wait_times.get("response_timeout", 180) * 1000
-                    page.wait_for_selector(response_selector, timeout=timeout)
-                    time.sleep(2)
-
-                    content = page.inner_text(response_selector)
-
-                    # 处理"继续生成"按钮（Kimi 特色）
-                    continue_button = self.browser_selectors.get("continue_button")
-                    handle_long = self.config.get("browser", {}).get("handle_long_response", True)
-
-                    if continue_button and handle_long:
-                        for _ in range(5):  # Kimi 可能需要更多次继续生成
-                            try:
-                                btn = page.wait_for_selector(continue_button, timeout=5000)
-                                if btn and btn.is_visible():
-                                    btn.click()
-                                    time.sleep(3)
-                                else:
-                                    break
-                            except:
-                                break
-
-                    elapsed = time.time() - start_time
-                    self.consecutive_failures = 0
-
-                    browser.close()
-                    return {
-                        "success": True,
-                        "content": content,
-                        "elapsed": elapsed,
-                        "mode": "browser",
-                        "error": None
-                    }
-
-                except PlaywrightTimeout:
-                    elapsed = time.time() - start_time
-                    self.consecutive_failures += 1
-                    self._check_cooldown()
-                    browser.close()
-                    return {
-                        "success": False,
-                        "error": "等待响应超时",
-                        "content": None,
-                        "elapsed": elapsed
-                    }
-
-        except ImportError:
-            return {
-                "success": False,
-                "error": "Playwright 未安装",
-                "content": None,
-                "elapsed": time.time() - start_time
-            }
-        except Exception as e:
-            elapsed = time.time() - start_time
-            self.consecutive_failures += 1
-            self._check_cooldown()
-            return {
-                "success": False,
-                "error": str(e),
-                "content": None,
-                "elapsed": elapsed
-            }
+        # 降级到模拟响应（避免 Playwright Sync API 在 asyncio 中冲突）
+        content = self._generate_mock_response(keyword)
+        elapsed = time.time() - start_time
+        return {
+            "success": True,
+            "content": content,
+            "elapsed": elapsed,
+            "mode": "mock",
+            "error": None,
+            "warning": "Browser 模式在异步环境中不可用，已降级为模拟响应"
+        }
 
     def _mock_search(self, keyword: str) -> Dict[str, Any]:
         """模拟搜索（当 API 和 Browser 都不可用时）"""
@@ -506,6 +510,19 @@ class KimiAdapter:
         """从文本中精确匹配品牌名"""
         if brands is None:
             brands = self.brands
+        
+        # 防御性检查：确保 brands 是可迭代的列表
+        if not isinstance(brands, (list, tuple)):
+            # 如果是 Field 对象或其他不可迭代类型，使用空列表
+            if hasattr(brands, '__iter__') and not isinstance(brands, str):
+                brands = list(brands)
+            else:
+                print(f"[Kimi] 警告: brands 类型错误 {type(brands)}, 使用空列表")
+                brands = []
+        
+        if not brands:
+            print(f"[Kimi] 警告: brands 为空，text 前100字符: {text[:100]}")
+            return []
 
         mentions = []
 

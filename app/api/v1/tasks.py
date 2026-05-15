@@ -52,7 +52,9 @@ async def _run_detection_for_task(
     task_id: str,
     keywords: List[str],
     brands: List[str],
-    platform: str
+    platform: str,
+    template_id: str = None,
+    parent_report_id: str = None
 ) -> dict:
     """
     执行检测任务（内部函数）
@@ -147,7 +149,9 @@ async def _run_detection_for_task(
                 for m in all_brand_mentions
             ],
             total_citations=len(all_citations),
-            report_html=report_html
+            report_html=report_html,
+            template_id=template_id,
+            parent_report_id=parent_report_id
         )
         
         # 更新任务状态为 completed

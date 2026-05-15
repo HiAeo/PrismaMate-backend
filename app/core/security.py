@@ -53,14 +53,10 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return encoded_jwt
 
 
-def decode_access_token(token: str) -> Optional[TokenData]:
-    """解码访问令牌"""
+def decode_access_token(token: str) -> Optional[dict]:
+    """解码访问令牌，返回原始 payload dict"""
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-        user_id: int = payload.get("sub")
-        email: str = payload.get("email")
-        if user_id is None:
-            return None
-        return TokenData(user_id=user_id, email=email)
+        return payload
     except JWTError:
         return None

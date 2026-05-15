@@ -3,6 +3,8 @@ PrismaMate 棱镜 - 极简检测 API
 
 调用 DeepSeek 适配器 + 品牌提取器 + 报告生成器
 支持 JWT 认证（可选），已登录用户的结果关联到用户账户
+
+Phase 3: 集成配额和积分检查
 """
 
 import datetime
@@ -20,6 +22,7 @@ from app.services.report_generator import (
     convert_brand_matches,
 )
 from app.services.brand_extractor import create_extractor
+from app.services.subscription_service import subscription_service
 from app.core.user_store import user_store
 
 logger = logging.getLogger(__name__)
@@ -55,7 +58,7 @@ router = APIRouter()
 
 class DetectionRequest(BaseModel):
     """检测请求"""
-    keywords: List[str] = Field(..., description="检测关键词列表", min_length=1, max_length=10)
+    keywords: List[str] = Field(..., description="检测关键词列表", min_items=1, max_items=10)
     brands: List[str] = Field(default_factory=list, description="品牌列表，为空使用默认列表")
     platform: str = Field(default="DeepSeek", description="AI 平台 (DeepSeek/Doubao/Kimi)")
 
@@ -138,6 +141,21 @@ async def run_detection(
             }
         )
     
+    # Phase 3: 如果已登录，检查配额和积分
+    if current_user:
+        can_detect, reason = subscription_service.check_detection_permission(current_user.user_id)
+        if not can_detect:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "quota_or_points_insufficient",
+                    "message": reason,
+                    "current_plan": current_user.plan_id,
+                    "points_balance": current_user.points_balance,
+                    "monthly_remaining": current_user.get_monthly_remaining()
+                }
+            )
+    
     # 如果已登录，先创建任务
     task_id = None
     if current_user:
@@ -165,16 +183,28 @@ async def run_detection(
         
         for keyword in request.keywords:
             # 调用 DeepSeek API
-            result = adapter.detect(keyword)
+            try:
+                result = adapter.detect(keyword)
+            except Exception as e:
+                import traceback
+                logger.error(f"adapter.detect() 异常: {e}\n{traceback.format_exc()}")
+                raise
             
             if not result["success"]:
                 # 记录失败
                 if cooldown_manager:
                     cooldown_manager.record_failure(platform_name)
                 
+                # 返回 422 结构化错误（非 5xx，避免前端显示 Bad Gateway）
+                error_msg = result.get('error', '未知错误')
                 raise HTTPException(
-                    status_code=502,
-                    detail=f"{platform_name} 调用失败: {result.get('error', '未知错误')}"
+                    status_code=422,
+                    detail={
+                        "error": f"{platform_name} 调用失败",
+                        "message": error_msg,
+                        "platform": platform_name,
+                        "status_code": result.get("status_code")
+                    }
                 )
             
             # 记录成功
@@ -217,6 +247,14 @@ async def run_detection(
         user_id = None
         if current_user:
             user_id = current_user.user_id
+            
+            # Phase 3: 扣除配额和积分
+            subscription_service.deduct_monthly_usage(user_id)
+            subscription_service.deduct_points(
+                user_id=user_id,
+                description=f"品牌检测消耗（关键词: {request.keywords[0]}...）"
+            )
+            
             user_store.create_report(
                 report_id=report.report_id,
                 verification_code=report.verification_code,
@@ -275,7 +313,14 @@ async def run_detection(
         # 更新任务状态为失败
         if current_user and task_id:
             user_store.update_task(task_id, status="failed", error_message=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        # 返回详细错误信息
+        import traceback
+        error_detail = {
+            "error": str(e),
+            "type": type(e).__name__,
+            "traceback": traceback.format_exc()
+        }
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @router.get("/brands")

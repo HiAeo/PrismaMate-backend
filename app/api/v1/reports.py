@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse
 
 from app.api.v1.auth import get_current_user, get_optional_user
 from app.core.user_store import user_store
+from app.services.comparison_engine import generate_comparison, get_comparison_summary_text
 
 logger = logging.getLogger(__name__)
 
@@ -267,3 +268,60 @@ async def list_reports(
         "limit": limit,
         "offset": offset
     }
+
+
+@router.get("/{report_id}/comparison")
+async def get_report_comparison(
+    report_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    获取报告对比数据
+    
+    返回当前报告与上一次同模板报告的对比结果
+    """
+    # 获取当前报告
+    report = user_store.get_report(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    
+    # 检查权限
+    if report.user_id != current_user.user_id:
+        raise HTTPException(status_code=403, detail="无权访问此报告")
+    
+    # 获取父报告
+    parent_report_id = report.parent_report_id
+    if not parent_report_id:
+        raise HTTPException(
+            status_code=404,
+            detail="此报告没有可对比的历史数据（首次体检报告）"
+        )
+    
+    parent_report = user_store.get_report(parent_report_id)
+    if not parent_report:
+        raise HTTPException(status_code=404, detail="对比的历史报告不存在")
+    
+    # 生成对比数据
+    comparison = generate_comparison(
+        current_report=report.to_dict(),
+        parent_report=parent_report.to_dict()
+    )
+    
+    # 添加摘要文本
+    comparison["summary_text"] = get_comparison_summary_text(comparison)
+    
+    # 添加两份报告的基本信息
+    comparison["current_report"] = {
+        "report_id": report.report_id,
+        "created_at": report.created_at.isoformat(),
+        "keywords": report.keywords,
+        "platforms": report.platforms
+    }
+    comparison["parent_report"] = {
+        "report_id": parent_report.report_id,
+        "created_at": parent_report.created_at.isoformat(),
+        "keywords": parent_report.keywords,
+        "platforms": parent_report.platforms
+    }
+    
+    return comparison

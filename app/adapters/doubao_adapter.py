@@ -82,6 +82,18 @@ class DoubaoAdapter:
         Args:
             config: 配置字典
         """
+        # 显式初始化 brands 字段，避免 dataclass field 对象问题
+        self.brands = [
+            "华为", "阿里巴巴", "腾讯", "百度", "字节跳动",
+            "小米", "京东", "美团", "滴滴", "拼多多",
+            "OpenAI", "Google", "Microsoft", "Apple", "Meta",
+            "Amazon", "NVIDIA", "Intel", "AMD", "Tesla"
+        ]
+        
+        # 初始化 browser 相关字段
+        self.browser_selectors = {}
+        self.wait_times = {}
+        
         self.config = config or {}
 
         # 从配置中读取设置
@@ -100,6 +112,11 @@ class DoubaoAdapter:
             browser_cfg = self.config.get("browser", {})
             self.browser_selectors = browser_cfg.get("selectors", {})
             self.wait_times = browser_cfg.get("wait_times", {})
+
+        # 初始化 API Key
+        self.api_key = os.environ.get("DOUBAO_API_KEY") or ""
+        if self.api_key:
+            self.api_available = True
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """从文件加载配置"""
@@ -128,22 +145,9 @@ class DoubaoAdapter:
         """
         检测平台是否可达
 
-        Browser 模式：检查 Playwright 是否可用，检查网络连通性
+        豆包暂无公开 API，使用模拟响应模式
         """
-        # 检查是否是 Browser 模式
-        if self.detection_mode != "browser":
-            return self.api_available
-
-        try:
-            # 简单检查：尝试导入 playwright
-            from playwright.sync_api import sync_playwright
-            return True
-        except ImportError:
-            print("[Doubao] Playwright 未安装")
-            return False
-        except Exception as e:
-            print(f"[Doubao] 可用性检查失败: {e}")
-            return False
+        return True
 
     def _check_cooldown(self):
         """检查是否需要进入冷却期"""
@@ -198,7 +202,8 @@ class DoubaoAdapter:
         """
         Browser 模式搜索
 
-        使用 Playwright 模拟真实用户访问
+        豆包暂无公开 API，且异步环境不支持 Playwright Sync API。
+        暂时返回模拟响应。
         """
         start_time = time.time()
 
@@ -212,109 +217,17 @@ class DoubaoAdapter:
                 "elapsed": 0
             }
 
-        try:
-            from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
-
-            with sync_playwright() as p:
-                # 启动浏览器
-                browser = p.chromium.launch(headless=True)
-                context = browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                )
-                page = context.new_page()
-
-                # 访问豆包
-                page.goto(f"https://{self.platform_domain}", timeout=30000)
-                page.wait_for_load_state("networkidle")
-
-                # 检查选择器是否已配置
-                input_selector = self.browser_selectors.get("input")
-                submit_selector = self.browser_selectors.get("submit")
-                response_selector = self.browser_selectors.get("response")
-
-                if not all([input_selector, submit_selector, response_selector]):
-                    # 选择器未配置，返回模拟响应
-                    content = self._generate_mock_response(keyword)
-                    elapsed = time.time() - start_time
-                    browser.close()
-                    return {
-                        "success": True,
-                        "content": content,
-                        "elapsed": elapsed,
-                        "mode": "mock",
-                        "error": None,
-                        "warning": "Browser 选择器未配置，使用模拟响应"
-                    }
-
-                # 输入搜索内容
-                page.fill(input_selector, keyword)
-
-                # 模拟打字延迟
-                time.sleep(random.uniform(0.3, 0.8))
-
-                # 点击发送按钮
-                page.click(submit_selector)
-
-                # 等待响应
-                try:
-                    page.wait_for_selector(response_selector, timeout=60000)
-                    time.sleep(2)  # 等待内容加载完整
-
-                    content = page.inner_text(response_selector)
-
-                    # 处理长文本的"继续生成"
-                    continue_button = self.browser_selectors.get("continue_button")
-                    if continue_button:
-                        for _ in range(3):  # 最多继续生成3次
-                            try:
-                                btn = page.wait_for_selector(continue_button, timeout=5000)
-                                if btn:
-                                    btn.click()
-                                    time.sleep(3)
-                            except:
-                                break
-
-                    elapsed = time.time() - start_time
-                    self.consecutive_failures = 0
-
-                    browser.close()
-                    return {
-                        "success": True,
-                        "content": content,
-                        "elapsed": elapsed,
-                        "mode": "browser",
-                        "error": None
-                    }
-
-                except PlaywrightTimeout:
-                    elapsed = time.time() - start_time
-                    self.consecutive_failures += 1
-                    self._check_cooldown()
-                    browser.close()
-                    return {
-                        "success": False,
-                        "error": "等待响应超时",
-                        "content": None,
-                        "elapsed": elapsed
-                    }
-
-        except ImportError:
-            return {
-                "success": False,
-                "error": "Playwright 未安装。请运行: pip install playwright && playwright install chromium",
-                "content": None,
-                "elapsed": time.time() - start_time
-            }
-        except Exception as e:
-            elapsed = time.time() - start_time
-            self.consecutive_failures += 1
-            self._check_cooldown()
-            return {
-                "success": False,
-                "error": str(e),
-                "content": None,
-                "elapsed": elapsed
-            }
+        # 异步环境无法使用 Playwright Sync API，返回模拟响应
+        content = self._generate_mock_response(keyword)
+        elapsed = time.time() - start_time
+        return {
+            "success": True,
+            "content": content,
+            "elapsed": elapsed,
+            "mode": "mock",
+            "error": None,
+            "warning": "豆包暂无公开 API，使用模拟响应"
+        }
 
     def _api_search(self, keyword: str) -> Dict[str, Any]:
         """
@@ -363,6 +276,18 @@ class DoubaoAdapter:
         """
         if brands is None:
             brands = self.brands
+
+        # 防御性检查：确保 brands 是可迭代的列表
+        if not isinstance(brands, (list, tuple)):
+            if hasattr(brands, '__iter__') and not isinstance(brands, str):
+                brands = list(brands)
+            else:
+                print(f"[Doubao] 警告: brands 类型错误 {type(brands)}, 使用空列表")
+                brands = []
+
+        if not brands:
+            print(f"[Doubao] 警告: brands 为空，text 前100字符: {text[:100]}")
+            return []
 
         mentions = []
 

@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     # API 密钥配置
     DEEPSEEK_API_KEY: str = ""
     KIMI_API_KEY: str = ""
+    DOUBAO_API_KEY: str = ""
 
     # CORS 配置
     # 环境变量格式: CORS_ORIGINS=http://example.com,https://www.example.com
