@@ -443,6 +443,14 @@ class Report:
         self.detection_results = detection_results or []
     
     def to_dict(self) -> dict:
+        # 安全处理 created_at：兼容字符串和 datetime
+        if isinstance(self.created_at, datetime):
+            created_at_str = self.created_at.isoformat()
+        elif isinstance(self.created_at, str):
+            created_at_str = self.created_at
+        else:
+            created_at_str = None
+        
         return {
             "report_id": self.report_id,
             "verification_code": self.verification_code,
@@ -454,7 +462,7 @@ class Report:
             "total_mentions": self.total_mentions,
             "brand_mentions": self.brand_mentions,
             "total_citations": self.total_citations,
-            "created_at": self.created_at.isoformat(),
+            "created_at": created_at_str,
             # V3.0 新增字段
             "template_id": self.template_id,
             "parent_report_id": self.parent_report_id,

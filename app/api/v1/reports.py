@@ -209,7 +209,8 @@ async def get_report(
     
     # 如果是用户报告，检查权限
     if report.user_id and current_user:
-        if report.user_id != current_user.user_id:
+        user_id = getattr(current_user, 'user_id', None) or current_user.get('user_id')
+        if report.user_id != user_id:
             raise HTTPException(status_code=403, detail="无权访问此报告")
     
     return report.to_dict()
@@ -233,7 +234,8 @@ async def get_report_html(
     
     # 如果是用户报告，检查权限
     if report.user_id and current_user:
-        if report.user_id != current_user.user_id:
+        user_id = getattr(current_user, 'user_id', None) or current_user.get('user_id')
+        if report.user_id != user_id:
             raise HTTPException(status_code=403, detail="无权访问此报告")
     
     if not report.report_html:
@@ -253,21 +255,43 @@ async def list_reports(
     
     需要认证
     """
-    reports = user_store.get_reports_by_user(current_user.user_id)
-    
-    # 按创建时间倒序
-    reports.sort(key=lambda r: r.created_at, reverse=True)
-    
-    # 分页
-    total = len(reports)
-    paginated = reports[offset:offset + limit]
-    
-    return {
-        "reports": [report.to_dict() for report in paginated],
-        "total": total,
-        "limit": limit,
-        "offset": offset
-    }
+    try:
+        # 兼容 dict / User 对象两种返回类型
+        user_id = getattr(current_user, 'user_id', None) or current_user.get('user_id')
+        reports = user_store.get_reports_by_user(user_id)
+        
+        # 按创建时间倒序（安全排序：忽略 created_at 为 None 的报告）
+        reports.sort(
+            key=lambda r: r.created_at if isinstance(r.created_at, datetime) else datetime.min,
+            reverse=True
+        )
+        
+        # 分页
+        total = len(reports)
+        paginated = reports[offset:offset + limit]
+        
+        # 安全序列化：单个报告 to_dict 失败时不影响整体
+        report_dicts = []
+        for report in paginated:
+            try:
+                report_dicts.append(report.to_dict())
+            except Exception as e:
+                logger.warning(f"报告 {getattr(report, 'report_id', '?')} 序列化失败: {e}")
+                report_dicts.append({
+                    "report_id": getattr(report, 'report_id', 'unknown'),
+                    "error": "数据格式异常",
+                    "created_at": None
+                })
+        
+        return {
+            "reports": report_dicts,
+            "total": total,
+            "limit": limit,
+            "offset": offset
+        }
+    except Exception as e:
+        logger.exception("获取报告列表失败")
+        raise HTTPException(status_code=500, detail=f"获取报告列表失败: {str(e)}")
 
 
 @router.get("/{report_id}/comparison")
@@ -286,7 +310,8 @@ async def get_report_comparison(
         raise HTTPException(status_code=404, detail="报告不存在")
     
     # 检查权限
-    if report.user_id != current_user.user_id:
+    user_id = getattr(current_user, 'user_id', None) or current_user.get('user_id')
+    if report.user_id != user_id:
         raise HTTPException(status_code=403, detail="无权访问此报告")
     
     # 获取父报告
